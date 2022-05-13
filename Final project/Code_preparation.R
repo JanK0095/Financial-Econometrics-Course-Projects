@@ -180,3 +180,23 @@ addLegend("topright", on = 1, legend.names = c("Realized Volatility", "AR(1)-RV"
 ### Forecasts ###
 #################
 
+#Storing window info
+exp_wind_start_len <- 750 #The start for the extending window
+roll_wind_len <- 750 #Number of rolling windows
+ 
+### AR(1)-RV ###
+#Expanding window
+ar1_RV_forec_exp <- xts(rep(NA, exp_wind_start_len), order.by = index(amzn)[751:1500]) #Empty xts object for the results
+for (i in 750:1499) { #Looping through the windows
+  ar1_RV_model <- lm(RV ~ RV_lag, data = amzn[1:i]) #Estimating the model on the window
+  ar1_RV_forec_exp[i - 749] <- predict(ar1_RV_model, newdata = amzn[i + 1]) #Forecasting
+}
+#Rolling window
+ar1_RV_forec_roll <- xts(rep(NA, exp_wind_start_len), order.by = index(amzn)[751:1500]) #Empty xts object for the results
+for (i in 1:roll_wind_len) {
+  ar1_RV_model <- lm(RV ~ RV_lag, data = amzn[i:(749+i)]) #Estimating the model on the window
+  ar1_RV_forec_roll[i] <- predict(ar1_RV_model, newdata = amzn[750 + i]) #Forecasting
+}
+#Forecast error
+plot(amzn$RV[751:1500] - ar1_RV_forec_exp)
+lines(amzn$RV[751:1500] - ar1_RV_forec_roll, col =  "red")
