@@ -72,6 +72,7 @@ legend("topright", legend = c("Realized Skewness", "Realited Kurtosis"), col = c
 #####################
 
 ### AR(1)-RV ###
+
 amzn$RV_lag <- lag(amzn$RV) #Adding the first lag of RV to the data
 ar1_rv <- lm(RV ~ RV_lag, data = amzn) #AR(1)-RV
 summary(ar1_rv) #Lag very statistically significant
@@ -81,8 +82,9 @@ lines(ar1_fitted, col = "red") #Not the greatest fit
 addLegend("topright", on = 1, legend.names = c("Realized Volatility", "AR(1)-RV fitted values"), col = c("black", "red"), lty = 1, bty = "n", lwd = c(2, 1))
 
 ### HAR ###
+
 #Manual
-calc_HAR_term <- function (x, len) { #Function for calculating HAR terms based on legnth
+calc_HAR_term <- function (x, len) { #Function for calculating HAR terms based on length
   result <- xts(rep(NA, length(x)), order.by = index(x)) #Empty xts object for the results
   for (i in len:length(x)) { #We have to skip the first "len - 1" observations
     result[i] <- mean(x[(i-len+1):i], na.rm = T) #For each obs calculate the mean of past "len - 1" observations
@@ -104,6 +106,7 @@ lines(har_fitted, col = "red") #Not the greatest fit either
 addLegend("topright", on = 1, legend.names = c("Realized Volatility", "HAR fitted values"), col = c("black", "red"), lty = 1, bty = "n", lwd = c(2, 1))
 
 ### HAR-RS (Realized Semi-volatility) ###
+
 amzn$RV_p_lag <- lag(amzn$RV_p) #Lag of Realized Positive Semi-volatility
 amzn$RV_n_lag <- lag(amzn$RV_n) #Lag of Realized Negative Semi-volatility
 #Model
@@ -116,6 +119,7 @@ lines(har_rs_fitted, col = "red") #Pretty decent but still not the greatest
 addLegend("topright", on = 1, legend.names = c("Realized Volatility", "HAR Realized Semi-volatility fitted values"), col = c("black", "red"), lty = 1, bty = "n", lwd = c(2, 1))
 
 ### HAR with Realized Skewness and Kurtosis ###
+
 amzn$RS_lag <- lag(amzn$RS) #Lag of Realized Skewness
 amzn$RK_lag <- lag(amzn$RK) #Lag of Realized Kurtosis
 #Model
@@ -128,6 +132,7 @@ lines(har_skew_kurt_fitted, col = "red") #Pretty decent, probably the best so fa
 addLegend("topright", on = 1, legend.names = c("Realized Volatility", "HAR with Realized Skewed and Kurtosis fitted values"), col = c("black", "red"), lty = 1, bty = "n", lwd = c(2, 1))
 
 ### Realized GARCH ###
+
 #Mean model
 auto.arima(amzn$ret, stationary = T, ic = "aic")
 auto.arima(amzn$ret, stationary = T, ic = "bic")
@@ -157,6 +162,7 @@ lines(real_garch_fitted, col = "red") #Seems very overestimated
 addLegend("topright", on = 1, legend.names = c("Realized Volatility", "Realized GARCH fitted values"), col = c("black", "red"), lty = 1, bty = "n", lwd = c(2, 1))
 
 ### ARMA-GARCH ###
+
 arma_garchspec <- ugarchspec(variance.model = list(model = "sGARCH", garchOrder = c(1, 2)), mean.model = list(armaOrder = c(1, 1)))
 arma_garch_fit <- ugarchfit(arma_garchspec, amzn$ret)
 arma_garch_fit #Everything significant, some dependency in standardized residuals for GARCH(1,1) => GARCH(1,2) better
@@ -167,6 +173,7 @@ lines(arma_garch_fitted, col = "red") #Seems extremely overestimated
 addLegend("topright", on = 1, legend.names = c("Realized Volatility", "ARMA-GARCH fitted values"), col = c("black", "red"), lty = 1, bty = "n", lwd = c(2, 1))
 
 ### Comparison ###
+
 plot(amzn$RV, main = "Comparison of estimated volatilities", grid.col = NA, lwd = 1)
 lines(ar1_fitted, col = "orange")
 lines(har_fitted, col = "blue")
@@ -180,23 +187,78 @@ addLegend("topright", on = 1, legend.names = c("Realized Volatility", "AR(1)-RV"
 ### Forecasts ###
 #################
 
-#Storing window info
-exp_wind_start_len <- 750 #The start for the extending window
-roll_wind_len <- 750 #Number of rolling windows
- 
+### Forecasting lm type models (first four) ###
+#Defining a function
+forecast_lm <- function(form, xts_object = amzn, wind_len = 750, roll = F) { #Forecast based on a dataset, model formula, length of the window and either rolling or expanding
+  result <- xts(rep(NA, wind_len), order.by = index(xts_object)[(wind_len + 1):nrow(xts_object)]) #Empty xts object for the results (predicting 751-1500)
+  if (roll == T) { #Rolling window
+    for (i in 1:wind_len) { #Looping through the rolled windows
+      model <- lm(form, data = xts_object[i:(wind_len-1+i)]) #Estimating the model on the window (1-750, 2-751...)
+      result[i] <- predict(model, newdata = xts_object[wind_len + i]) #Forecasting
+    }
+    } else { #Expanding window
+    for (i in wind_len:(nrow(xts_object) - 1)) { #Looping through the windows (750-1499)
+      model <- lm(form, data = xts_object[1:i]) #Estimating the model on the window
+      result[i - wind_len + 1] <- predict(model, newdata = xts_object[i + 1]) #Forecasting
+    }
+    }
+  return(result)
+}
+
+#Initiating a vector for storing the forecasts
+forecasts <- vector("list", 6) #For 6 models
+
+#Defining a name and formula for each model
+model_names <- c("AR(1)-RV", "HAR", "HAR-RS", "HAR-Skew&Kurt", "Real GARCH", "ARMA-GARCH")
+formulas <- c("RV ~ RV_lag", "RV ~ RV_lag + RV_5 + RV_22", "RV ~ RV_p_lag + RV_n_lag + RV_5 + RV_22",
+              "RV ~ RV_lag + RV_5 + RV_22 + RS_lag + RK_lag")
+
+#Looping through the first 4 models (lm type)
+for (i in 1:4) {
+  #For each model forecast with expanding window and rolling window and merge the resulting series together and store the result in a list
+  forecasts[[i]] <-  merge.xts(forecast_lm(formulas[i]), forecast_lm(formulas[i], roll = T))
+  names(forecasts[[i]]) <- paste(rep(model_names[i], 2), c("exp", "roll"), sep = "_") #Name the columns for clarity
+}
+
+### Forecasting Realized GARCH ###
+#Defining a function to choose an appropriate ARMA order of a given series
+find_ARMA_order <- function(xts_object) {
+  
+}
+
+########################################################################
+### OLD CODE ###
+
 ### AR(1)-RV ###
 #Expanding window
-ar1_RV_forec_exp <- xts(rep(NA, exp_wind_start_len), order.by = index(amzn)[751:1500]) #Empty xts object for the results
-for (i in 750:1499) { #Looping through the windows
+ar1_RV_forec_exp <- xts(rep(NA, wind_len), order.by = index(amzn)[(wind_len + 1):nrow(amzn)]) #Empty xts object for the results (predicting 751-1500)
+for (i in wind_len:(nrow(amzn) - 1)) { #Looping through the windows (750-1499)
   ar1_RV_model <- lm(RV ~ RV_lag, data = amzn[1:i]) #Estimating the model on the window
-  ar1_RV_forec_exp[i - 749] <- predict(ar1_RV_model, newdata = amzn[i + 1]) #Forecasting
+  ar1_RV_forec_exp[i - wind_len + 1] <- predict(ar1_RV_model, newdata = amzn[i + 1]) #Forecasting
 }
 #Rolling window
-ar1_RV_forec_roll <- xts(rep(NA, exp_wind_start_len), order.by = index(amzn)[751:1500]) #Empty xts object for the results
-for (i in 1:roll_wind_len) {
-  ar1_RV_model <- lm(RV ~ RV_lag, data = amzn[i:(749+i)]) #Estimating the model on the window
-  ar1_RV_forec_roll[i] <- predict(ar1_RV_model, newdata = amzn[750 + i]) #Forecasting
+ar1_RV_forec_roll <- xts(rep(NA, wind_len), order.by = index(amzn)[(wind_len + 1):nrow(amzn)]) #Empty xts object for the results (predicting 751-1500)
+for (i in 1:wind_len) { #Looping through the rolled windows
+  ar1_RV_model <- lm(RV ~ RV_lag, data = amzn[i:(wind_len-1+i)]) #Estimating the model on the window (1-750, 2-751...)
+  ar1_RV_forec_roll[i] <- predict(ar1_RV_model, newdata = amzn[wind_len + i]) #Forecasting
 }
 #Forecast error
 plot(amzn$RV[751:1500] - ar1_RV_forec_exp)
 lines(amzn$RV[751:1500] - ar1_RV_forec_roll, col =  "red")
+
+### HAR ###
+#Expanding window
+har_forec_exp <- xts(rep(NA, wind_len), order.by = index(amzn)[(wind_len + 1):nrow(amzn)]) #Empty xts object for the results
+for (i in wind_len:(nrow(amzn) - 1)) { #Looping through the windows (750-1499)
+  har_model <- lm(RV ~ RV_lag + RV_5 + RV_22, data = amzn[1:i]) #Estimating the model on the window
+  har_forec_exp[i - wind_len + 1] <- predict(har_model, newdata = amzn[i + 1]) #Forecasting
+}
+#Rolling window
+har_forec_roll <- xts(rep(NA, wind_len), order.by = index(amzn)[(wind_len + 1):nrow(amzn)]) #Empty xts object for the results (predicting 751-1500)
+for (i in 1:wind_len) { #Looping through the rolled windows
+  har_model <- lm(RV ~ RV_lag + RV_5 + RV_22, data = amzn[i:(wind_len-1+i)]) #Estimating the model on the window
+  har_forec_roll[i] <- predict(har_model, newdata = amzn[wind_len + i]) #Forecasting
+}
+#Forecast error
+plot(amzn$RV[751:1500] - har_forec_exp)
+lines(amzn$RV[751:1500] - har_forec_roll, col =  "red")
