@@ -153,7 +153,7 @@ for (lag_order in c(4, 8, 12)) {
 real_garchspec<- ugarchspec(variance.model = list(model = "realGARCH", garchOrder = c(1, 1)),
                             mean.model = list(armaOrder = c(1, 1)))
 real_garch_fit<- ugarchfit(real_garchspec, amzn$ret, realizedVol = amzn$RV)  
-real_garch_fit #Realized Volatility insignificant, spec tests ok
+real_garch_fit #alpha1 is exactly one, that is strange, spec tests ok
 real_garch_fitted <- sigma(real_garch_fit)
 #Plotting fitted
 dev.off()
@@ -220,13 +220,39 @@ for (i in 1:4) {
   names(forecasts[[i]]) <- paste(rep(model_names[i], 2), c("exp", "roll"), sep = "_") #Name the columns for clarity
 }
 
-### Forecasting Realized GARCH ###
-#Defining a function to choose an appropriate ARMA order of a given series
-find_ARMA_order <- function(xts_object) {
-  
+### Forecasting GARCH type models ###
+
+#Defining a function to forecast GARCH type models
+forecast_garch <- function(specif, xts_object = amzn$ret, realizedVol = amzn$RV, wind_len = 750, roll = F) {
+  result <- xts(rep(NA, wind_len), order.by = index(xts_object)[(wind_len + 1):nrow(xts_object)]) #Empty xts object for the results (predicting 751-1500)
+  if (roll == T) {
+    for (i in 1:wind_len) { #Looping through the rolled windows
+      model <- ugarchfit(specif, xts_object[i:(wind_len-1+i)], realizedVol = realizedVol[i:(wind_len-1+i)]) #Fitting the model
+      result[i] <- as.numeric(ugarchforecast(model, n.ahead = 1)@forecast$sigmaFor) #Producing the 1 step ahead forecast
+    }
+  } else { #Expanding window
+    for (i in wind_len:(nrow(xts_object) - 1)) { #Looping through the windows (750-1499)
+      model <- ugarchfit(specif, xts_object[1:i], realizedVol = realizedVol[1:i]) #Estimating the model on the window
+      result[i - wind_len + 1] <- as.numeric(ugarchforecast(model, n.ahead = 1)@forecast$sigmaFor) #Producing the 1 step ahead forecast
+    }
+  }
+  return(result)
 }
 
-########################################################################
+#Looping through the last two (GARCH type) models
+specs <- list(real_garchspec, arma_garchspec) #Storing the specifications for looping
+for (i in 1:2) {
+  forecasts[[i + 4]] <- merge.xts(forecast_garch(specs[[i]]), forecast_garch(specs[[i]], roll = T))
+  names(forecasts[[i + 4]]) <- paste(rep(model_names[i + 4], 2), c("exp", "roll"), sep = "_") #Name the columns for clarity
+}
+
+
+x<-forecast_garch(real_garchspec)
+
+
+
+########################################################################################################################################
+
 ### OLD CODE ###
 
 ### AR(1)-RV ###
@@ -262,3 +288,10 @@ for (i in 1:wind_len) { #Looping through the rolled windows
 #Forecast error
 plot(amzn$RV[751:1500] - har_forec_exp)
 lines(amzn$RV[751:1500] - har_forec_roll, col =  "red")
+
+
+#Defining a function to choose an appropriate ARMA order of a given series
+find_ARMA_order <- function(xts_object) {
+  auto_model <- auto.arima(xts_object, stationary = T, ic = "aic") #Minimize AIC (high no of obs => BIC penalizes too much)
+  return(auto_model$arma[1:2]) #Return the order
+}
