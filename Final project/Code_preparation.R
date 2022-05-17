@@ -134,28 +134,49 @@ addLegend("topright", on = 1, legend.names = c("Realized Volatility", "HAR with 
 ### Realized GARCH ###
 
 #Mean model
-auto.arima(amzn$ret, stationary = T, ic = "aic")
-auto.arima(amzn$ret, stationary = T, ic = "bic")
-#Trying ARMA(1,1)
+auto.arima(amzn$ret, stationary = T, ic = "aic") #ARMA(1,1)
+auto.arima(amzn$ret, stationary = T, ic = "bic") #ARMA(0,0)
+auto.arima(amzn$ret, stationary = T, ic = "aicc") #ARMA(1,1)
+
+#Trying ARMA(0,0) and ARMA(1,1)
+arma00 <- Arima(amzn$ret, order = c(0, 0, 0))
 arma11 <- Arima(amzn$ret, order = c(1, 0, 1))
 par(mfrow = c(2, 1))
+acf(arma00$residuals, main = "ACF", ylab = "") #No dependencies
+pacf(arma00$residuals, main = "PACF", ylab = "") #Some dependencies
 acf(arma11$residuals, main = "ACF", ylab = "") #No dependencies
 pacf(arma11$residuals, main = "PACF", ylab = "") #No dependencies
-#Ljung-Box test ARMA(1,1) residuals
+#Ljung-Box test returns
 for (lag_order in c(4, 8, 12)) {
   print(Box.test(amzn$ret, type = "Ljung-Box", lag = lag_order)$p.value) #Significant 4th and 8th lag
 }
-#Ljung-Box test returns
+#Ljung-Box test ARMA(0,0) residuals
+for (lag_order in c(4, 8, 12)) {
+  print(Box.test(arma00$residuals, type = "Ljung-Box", lag = lag_order)$p.value) #Singnificant 4th and 8th lag
+}
+#Ljung-Box test ARMA(1,1) residuals
 for (lag_order in c(4, 8, 12)) {
   print(Box.test(arma11$residuals, type = "Ljung-Box", lag = lag_order)$p.value) #No significant dependencies
 }
-#Realized GARCH
+
+#Realized GARCH with ARMA(0,0)
+real_garchspec_arma00 <- ugarchspec(variance.model = list(model = "realGARCH", garchOrder = c(1, 1)),
+                            mean.model = list(armaOrder = c(0, 0)))
+real_garch_arma00_fit<- ugarchfit(real_garchspec_arma00, amzn$ret, realizedVol = amzn$RV)  
+real_garch_arma00_fit #Spec tests ok
+acf(residuals(real_garch_arma00_fit, standardize = T), main = "ACF", ylab = "")
+pacf(residuals(real_garch_arma00_fit, standardize = T), main = "PACF", ylab = "") #Some small dependencies
+
+#Realized GARCH with ARMA(1,1)
 real_garchspec<- ugarchspec(variance.model = list(model = "realGARCH", garchOrder = c(1, 1)),
                             mean.model = list(armaOrder = c(1, 1)))
 real_garch_fit<- ugarchfit(real_garchspec, amzn$ret, realizedVol = amzn$RV, solver = "hybrid")  
 real_garch_fit #alpha1 is exactly one, that is strange, spec tests ok
+acf(residuals(real_garch_fit, standardize = T), main = "ACF", ylab = "")
+pacf(residuals(real_garch_fit, standardize = T), main = "PACF", ylab = "") #Looks slightly better than ARMA(0,0)
+
+#Plotting the estimated volatility
 real_garch_fitted <- sigma(real_garch_fit)
-#Plotting fitted
 dev.off()
 plot(amzn$RV, main = "Realized GARCH estimated volatility", grid.col = NA)
 lines(real_garch_fitted, col = "red") #Seems very overestimated
@@ -231,24 +252,14 @@ forecast_garch <- function(specif, xts_object = amzn$ret, realizedVol = amzn$RV,
     print("roll")
     for (i in 1:wind_len) { #Looping through the rolled windows
       print(i)
-      model <- tryCatch({ #We want to catch the cases where the Hessian cannot be inverted and estimate ARMA(0,0) instead since otherwise the forecasts are unreasonable
-        ugarchfit(specif, xts_object[i:(wind_len-1+i)], realizedVol = realizedVol[i:(wind_len-1+i)], solver = "hybrid") #Fitting the model, hybrid solver to prevent convergence failure
-      },
-        warning = function(w) {
-          ugarchfit(simpler_real_garchspec, xts_object[i:(wind_len-1+i)], realizedVol = realizedVol[i:(wind_len-1+i)], solver = "hybrid")
-        })
+      model <- ugarchfit(specif, xts_object[i:(wind_len-1+i)], realizedVol = realizedVol[i:(wind_len-1+i)], solver = "hybrid") #Fitting the model, hybrid solver to prevent convergence failure
       result[i] <- as.numeric(ugarchforecast(model, n.ahead = 1)@forecast$sigmaFor) #Producing the 1 step ahead forecast
     }
   } else { #Expanding window
     print("exp")
     for (i in wind_len:(nrow(xts_object) - 1)) { #Looping through the windows (750-1499)
       print(i)
-      model <- tryCatch({
-        ugarchfit(specif, xts_object[1:i], realizedVol = realizedVol[1:i], solver = "hybrid") #Estimating the model on the window, hybrid solver to prevent convergence failure
-      },
-      warning = function(w) {
-        ugarchfit(simpler_real_garchspec, xts_object[1:i], realizedVol = realizedVol[1:i], solver = "hybrid")
-      })
+      model <- ugarchfit(specif, xts_object[1:i], realizedVol = realizedVol[1:i], solver = "hybrid") #Estimating the model on the window, hybrid solver to prevent convergence failure
       result[i - wind_len + 1] <- as.numeric(ugarchforecast(model, n.ahead = 1)@forecast$sigmaFor) #Producing the 1 step ahead forecast
     }
   }
@@ -256,26 +267,39 @@ forecast_garch <- function(specif, xts_object = amzn$ret, realizedVol = amzn$RV,
 }
 
 #Looping through the last two (GARCH type) models
-specs <- list(real_garchspec, arma_garchspec) #Storing the specifications for looping 
-simpler_real_garchspec <- ugarchspec(variance.model = list(model = "realGARCH", garchOrder = c(1, 1)),mean.model = list(armaOrder = c(0, 0))) #In some cases ARMA(1,1) results in convergence failure => we will use ARMA(0,0) instead
+specs <- list(real_garchspec, arma_garchspec) #Storing the specifications for looping (Chose ARMA(0,0) with realized garch to be more parsimonious)
 for (i in 1:2) { #This takes like 5000 years
   forecasts[[i + 4]] <- merge.xts(forecast_garch(specs[[i]]), forecast_garch(specs[[i]], roll = T))
   names(forecasts[[i + 4]]) <- paste(rep(model_names[i + 4], 2), c("exp", "roll"), sep = "_") #Name the columns for clarity
 }
 
-#Inspecting the forecasts
-for (i in 1:6) {
-  print(summary(forecasts[[i]])) #Incredibly high forecasts in some cases => 
+### Saving the list of forecasts (since the code runs for a long time) ###
+save("forecasts", file = "forecasts.RData")
+
+#Converting the GARCH forecasts from variance to volatility
+for (i in 5:6) {
+  forecasts[[i]] <- sqrt(forecasts[[i]])
 }
 
-### Saving the list of forecasts ###
-save("forecasts", file = "forecasts.RData")
+#Inspecting the forecasts
+for (i in 1:6) {
+  print(summary(forecasts[[i]])) #Incredibly high forecasts for Realized GARCH with expanding window (possibly due to convergence issues)
+}
+
+#Inspecting the boxplots
+par(mfrow = c(3, 2))
+for (i in 1:6) {
+  boxplot(forecasts[[i]]) #Realized GARCH with expanding window has extreme values
+}
+box_real_garch_forec <- boxplot(forecasts[[5]][, 1])
+box_real_garch_forec$out #Outliers of realized GARCH with expanding window
+forecasts[[5]][forecasts[[5]][, 1] >= 0.2, 1] <- NA #Disregarding values higher than 0.2
 
 ### Calculating forecast errors ###
 #Defining a function to calculate the errors
 calc_errors <- function(xts_object) { #Expects and xts object with two columns (extending and rolling window)
-  first_col <- amzn$RV[index(xts_object)] - sqrt(xts_object[, 1]) #True RV - forecasted RV
-  second_col <- amzn$RV[index(xts_object)] - sqrt(xts_object[, 2]) #True RV - forecasted RV
+  first_col <- amzn$RV[index(xts_object)] - xts_object[, 1] #True RV - forecasted RV
+  second_col <- amzn$RV[index(xts_object)] - xts_object[, 2] #True RV - forecasted RV
   result <- merge.xts(first_col, second_col) #Merge the columns together
   names(result) <- paste(names(xts_object), "error", sep = "_") #Rename the columns for clarity
   return(result) #Return an xts object with two columns containing the errors
@@ -310,10 +334,10 @@ MSE <- do.call(merge.xts, lapply(forecast_errors, calc_loss)) #MSE
 MAE <- do.call(merge.xts, lapply(forecast_errors, calc_loss, loss_func = "MAE")) #MAE
 
 #Calculating mean MSE and MAE
-MSE_mean <- apply(MSE, 2, mean)
-MAE_mean <- apply(MAE, 2, mean)
-sort(MSE_mean) #HAR-Skew#Kurt_roll most precise
-sort(MAE_mean) #Real GARCH roll most precise
+MSE_mean <- apply(MSE, 2, mean, na.rm = T)
+MAE_mean <- apply(MAE, 2, mean, na.rm = T)
+sort(MSE_mean) #HAR-RS_exp most precise
+sort(MAE_mean) #HAR-RS_roll most precise
 
 ### Diebold-Mariano test ###
 dm_test_points <- rep(0, 12) #Empty vector to store the number of times a model is more accurate than another model
@@ -323,17 +347,16 @@ for (i in 1:12) { #Looping through the columns of MSE
     if (i==j) { #Skip an iteration to prevent testing of a model against itself
       next
     } else {
-      test_result <- dm.test(MSE[, i], MSE[, j], alternative = "less")
+      test_result <- dm.test(na.omit(MSE[, i]), na.omit(MSE[, j]), alternative = "less")
       dm_test_points[i] <- ifelse(test_result$p.value <= 0.05, dm_test_points[i] + 1, dm_test_points[i])
     }
   }
 }
-sort(dm_test_points, decreasing = T) #3 HAR roll models tied in the first place
+sort(dm_test_points, decreasing = T) #HAR-RS the best
 
 ### Mincer-Zarnowitz regression ###
 
 forecasts_merged <- do.call(merge.xts, forecasts) #Merging the forecasts into a single xts object
-forecasts_merged <- sqrt(forecasts_merged) #Getting volatility (square root of variance)
 MZ_results <- rep(NA, 12) #Empty vector for the results of MZ test
 names(MZ_results) <- names(forecasts_merged)
 for (i in 1:12) { #For each model
@@ -343,7 +366,7 @@ for (i in 1:12) { #For each model
   indic2 <- abs((mz_model_sum$coefficients[2, 1] - 1)/mz_model_sum$coefficients[2, 2]) < 1.96 #Check that the coef is not different from 1
   MZ_results[i] <- ifelse(indic1 & indic2, T, F)
 }
-MZ_results #Half of the models pass and half does not (GARCH probably due to outliers)
+MZ_results #Half of the models pass and half does not
 
 
 ########################################################################################################################################
@@ -387,6 +410,38 @@ lines(amzn$RV[751:1500] - har_forec_roll, col =  "red")
 
 #Defining a function to choose an appropriate ARMA order of a given series
 find_ARMA_order <- function(xts_object) {
-  auto_model <- auto.arima(xts_object, stationary = T, ic = "aic") #Minimize AIC (high no of obs => BIC penalizes too much)
+  auto_model <- auto.arima(xts_object, stationary = T, ic = "bic") #BIC since AIC may overfit in large samples
   return(auto_model$arma[1:2]) #Return the order
+}
+
+#Defining a function to forecast GARCH type models
+forecast_garch <- function(specif, xts_object = amzn$ret, realizedVol = amzn$RV, wind_len = 750, roll = F) {
+  result <- xts(rep(NA, wind_len), order.by = index(xts_object)[(wind_len + 1):nrow(xts_object)]) #Empty xts object for the results (predicting 751-1500)
+  print(specif@model$modeldesc$vmodel)
+  if (roll == T) { #Rolling window
+    print("roll")
+    for (i in 1:wind_len) { #Looping through the rolled windows
+      print(i)
+      model <- tryCatch({ #We want to catch the cases where the Hessian cannot be inverted and estimate ARMA(0,0) instead since otherwise the forecasts are unreasonable
+        ugarchfit(specif, xts_object[i:(wind_len-1+i)], realizedVol = realizedVol[i:(wind_len-1+i)], solver = "hybrid") #Fitting the model, hybrid solver to prevent convergence failure
+      },
+      warning = function(w) {
+        ugarchfit(simpler_real_garchspec, xts_object[i:(wind_len-1+i)], realizedVol = realizedVol[i:(wind_len-1+i)], solver = "hybrid")
+      })
+      result[i] <- as.numeric(ugarchforecast(model, n.ahead = 1)@forecast$sigmaFor) #Producing the 1 step ahead forecast
+    }
+  } else { #Expanding window
+    print("exp")
+    for (i in wind_len:(nrow(xts_object) - 1)) { #Looping through the windows (750-1499)
+      print(i)
+      model <- tryCatch({
+        ugarchfit(specif, xts_object[1:i], realizedVol = realizedVol[1:i], solver = "hybrid") #Estimating the model on the window, hybrid solver to prevent convergence failure
+      },
+      warning = function(w) {
+        ugarchfit(simpler_real_garchspec, xts_object[1:i], realizedVol = realizedVol[1:i], solver = "hybrid")
+      })
+      result[i - wind_len + 1] <- as.numeric(ugarchforecast(model, n.ahead = 1)@forecast$sigmaFor) #Producing the 1 step ahead forecast
+    }
+  }
+  return(result)
 }
