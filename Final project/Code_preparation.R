@@ -5,6 +5,8 @@ library(ggpubr)
 library(tseries)
 library(highfrequency)
 library(rugarch)
+library(lmtest)
+library(sandwich)
 
 #Loading the data
 load("31.RData")
@@ -83,6 +85,11 @@ addLegend("topright", on = 1, legend.names = c("Realized Volatility", "AR(1)-RV 
 
 ### HAR ###
 
+#Automatic
+har_auto <- HARmodel(amzn$RV, periods = c(1, 5, 22))
+summary(har_auto) #The same as manual apart from standard errors
+har_fitted <- xts(har_auto$fitted.values, order.by = as.Date(names(har_auto$fitted.values)))
+
 #Manual
 calc_HAR_term <- function (x, len) { #Function for calculating HAR terms based on length
   result <- xts(rep(NA, length(x)), order.by = index(x)) #Empty xts object for the results
@@ -95,11 +102,8 @@ amzn$RV_5 <- calc_HAR_term(amzn$RV, 5) #RV_(t-1)^5
 amzn$RV_22 <- calc_HAR_term(amzn$RV, 22) #RV_(t-1)^22
 har_manual <- lm(RV ~ RV_lag + RV_5 + RV_22, data = amzn)
 summary(har_manual) #All significant
+coeftest(har_manual, vcov = NeweyWest(har_manual, lag = 22)) #HAC Newey-West standard errors to match the auto function
 
-#Automatic
-har_auto <- HARmodel(amzn$RV, periods = c(1, 5, 22))
-summary(har_auto) #The same as manual
-har_fitted <- xts(har_auto$fitted.values, order.by = as.Date(names(har_auto$fitted.values))) 
 #Plotting fitted
 plot(amzn$RV, main = "HAR estimated volatility", grid.col = NA)
 lines(har_fitted, col = "red") #Not the greatest fit either
@@ -109,10 +113,12 @@ addLegend("topright", on = 1, legend.names = c("Realized Volatility", "HAR fitte
 
 amzn$RV_p_lag <- lag(amzn$RV_p) #Lag of Realized Positive Semi-volatility
 amzn$RV_n_lag <- lag(amzn$RV_n) #Lag of Realized Negative Semi-volatility
+
 #Model
 har_rs <- lm(RV ~ RV_p_lag + RV_n_lag + RV_5 + RV_22, data = amzn)
 summary(har_rs) #All significant
 har_rs_fitted <- xts(har_rs$fitted.values, order.by = as.Date(names(har_rs$fitted.values)))
+
 #Plotting fitted
 plot(amzn$RV, main = "HAR with Realized Semi-volatility estimated volatility", grid.col = NA)
 lines(har_rs_fitted, col = "red") #Pretty decent but still not the greatest
@@ -133,6 +139,22 @@ addLegend("topright", on = 1, legend.names = c("Realized Volatility", "HAR with 
 
 ### Realized GARCH ###
 
+real_garchspec <- ugarchspec(variance.model = list(model = "realGARCH", garchOrder = c(1, 1)),
+                            mean.model = list(armaOrder = c(0, 0)))
+real_garch_fit<- ugarchfit(real_garchspec, amzn$ret, realizedVol = amzn$RV)  
+real_garch_fit #Spec tests ok
+acf(residuals(real_garch_fit, standardize = T), main = "ACF", ylab = "")
+pacf(residuals(real_garch_fit, standardize = T), main = "PACF", ylab = "") #Some very small dependencies
+
+#Plotting the estimated volatility
+real_garch_fitted <- sigma(real_garch_fit)
+dev.off()
+plot(amzn$RV, main = "Realized GARCH estimated volatility", grid.col = NA)
+lines(real_garch_fitted, col = "red") #Seems very overestimated
+addLegend("topright", on = 1, legend.names = c("Realized Volatility", "Realized GARCH fitted values"), col = c("black", "red"), lty = 1, bty = "n", lwd = c(2, 1))
+
+### ARMA-GARCH ###
+
 #Mean model
 auto.arima(amzn$ret, stationary = T, ic = "aic") #ARMA(1,1)
 auto.arima(amzn$ret, stationary = T, ic = "bic") #ARMA(0,0)
@@ -146,43 +168,15 @@ acf(arma00$residuals, main = "ACF", ylab = "") #No dependencies
 pacf(arma00$residuals, main = "PACF", ylab = "") #Some dependencies
 acf(arma11$residuals, main = "ACF", ylab = "") #No dependencies
 pacf(arma11$residuals, main = "PACF", ylab = "") #No dependencies
-#Ljung-Box test returns
-for (lag_order in c(4, 8, 12)) {
-  print(Box.test(amzn$ret, type = "Ljung-Box", lag = lag_order)$p.value) #Significant 4th and 8th lag
-}
+
 #Ljung-Box test ARMA(0,0) residuals
 for (lag_order in c(4, 8, 12)) {
-  print(Box.test(arma00$residuals, type = "Ljung-Box", lag = lag_order)$p.value) #Singnificant 4th and 8th lag
+  print(Box.test(arma00$residuals, type = "Ljung-Box", lag = lag_order)$p.value) #Significant 4th and 8th lag
 }
 #Ljung-Box test ARMA(1,1) residuals
 for (lag_order in c(4, 8, 12)) {
   print(Box.test(arma11$residuals, type = "Ljung-Box", lag = lag_order)$p.value) #No significant dependencies
 }
-
-#Realized GARCH with ARMA(0,0)
-real_garchspec_arma00 <- ugarchspec(variance.model = list(model = "realGARCH", garchOrder = c(1, 1)),
-                            mean.model = list(armaOrder = c(0, 0)))
-real_garch_arma00_fit<- ugarchfit(real_garchspec_arma00, amzn$ret, realizedVol = amzn$RV)  
-real_garch_arma00_fit #Spec tests ok
-acf(residuals(real_garch_arma00_fit, standardize = T), main = "ACF", ylab = "")
-pacf(residuals(real_garch_arma00_fit, standardize = T), main = "PACF", ylab = "") #Some small dependencies
-
-#Realized GARCH with ARMA(1,1)
-real_garchspec<- ugarchspec(variance.model = list(model = "realGARCH", garchOrder = c(1, 1)),
-                            mean.model = list(armaOrder = c(1, 1)))
-real_garch_fit<- ugarchfit(real_garchspec, amzn$ret, realizedVol = amzn$RV, solver = "hybrid")  
-real_garch_fit #alpha1 is exactly one, that is strange, spec tests ok
-acf(residuals(real_garch_fit, standardize = T), main = "ACF", ylab = "")
-pacf(residuals(real_garch_fit, standardize = T), main = "PACF", ylab = "") #Looks slightly better than ARMA(0,0)
-
-#Plotting the estimated volatility
-real_garch_fitted <- sigma(real_garch_fit)
-dev.off()
-plot(amzn$RV, main = "Realized GARCH estimated volatility", grid.col = NA)
-lines(real_garch_fitted, col = "red") #Seems very overestimated
-addLegend("topright", on = 1, legend.names = c("Realized Volatility", "Realized GARCH fitted values"), col = c("black", "red"), lty = 1, bty = "n", lwd = c(2, 1))
-
-### ARMA-GARCH ###
 
 arma_garchspec <- ugarchspec(variance.model = list(model = "sGARCH", garchOrder = c(1, 2)), mean.model = list(armaOrder = c(1, 1)))
 arma_garch_fit <- ugarchfit(arma_garchspec, amzn$ret)
@@ -195,6 +189,7 @@ addLegend("topright", on = 1, legend.names = c("Realized Volatility", "ARMA-GARC
 
 ### Comparison ###
 
+#Plotting the estimated volatilities
 plot(amzn$RV, main = "Comparison of estimated volatilities", grid.col = NA, lwd = 1)
 lines(ar1_fitted, col = "orange")
 lines(har_fitted, col = "blue")
@@ -203,6 +198,20 @@ lines(har_skew_kurt_fitted, col = "red")
 lines(real_garch_fitted, col = "yellow")
 lines(arma_garch_fitted, col = "grey")
 addLegend("topright", on = 1, legend.names = c("Realized Volatility", "AR(1)-RV", "HAR", "HAR-RS", "HAR-Skew&Kurt", "Real GARCH", "ARMA-GARCH"), col = c("black", "orange", "blue", "green", "red", "yellow", "grey"), lty = 1, bty = "n", lwd = 1)
+
+#Calculating the errors
+insample_errors <- vector("list", 6)
+fitted_values <- list(ar1_fitted, har_fitted, har_rs_fitted, har_skew_kurt_fitted, real_garch_fitted, arma_garch_fitted)
+for (i in 1:6) {
+  insample_errors[[i]] <- abs(amzn$RV[index(fitted_values[[i]])] - fitted_values[[i]])
+}
+
+#Plotting the errors
+model_names <- c("AR(1)-RV", "HAR", "HAR-RS", "HAR-Skew&Kurt", "Real GARCH", "ARMA-GARCH") #Defining model names
+par(mfrow = c(3, 2))
+for (i in 1:6) {
+  print(plot(insample_errors[[i]], ylim = c(min(insample_errors[[1]]), max(insample_errors[[1]])), main = model_names[i]))
+}
 
 #################
 ### Forecasts ###
@@ -230,8 +239,7 @@ forecast_lm <- function(form, xts_object = amzn, wind_len = 750, roll = F) { #Fo
 #Initiating a vector for storing the forecasts
 forecasts <- vector("list", 6) #For 6 models
 
-#Defining a name and formula for each model
-model_names <- c("AR(1)-RV", "HAR", "HAR-RS", "HAR-Skew&Kurt", "Real GARCH", "ARMA-GARCH")
+#Defining the formulas for each model
 formulas <- c("RV ~ RV_lag", "RV ~ RV_lag + RV_5 + RV_22", "RV ~ RV_p_lag + RV_n_lag + RV_5 + RV_22",
               "RV ~ RV_lag + RV_5 + RV_22 + RS_lag + RK_lag")
 
@@ -267,7 +275,7 @@ forecast_garch <- function(specif, xts_object = amzn$ret, realizedVol = amzn$RV,
 }
 
 #Looping through the last two (GARCH type) models
-specs <- list(real_garchspec, arma_garchspec) #Storing the specifications for looping (Chose ARMA(0,0) with realized garch to be more parsimonious)
+specs <- list(real_garchspec, arma_garchspec) #Storing the specifications for looping
 for (i in 1:2) { #This takes like 5000 years
   forecasts[[i + 4]] <- merge.xts(forecast_garch(specs[[i]]), forecast_garch(specs[[i]], roll = T))
   names(forecasts[[i + 4]]) <- paste(rep(model_names[i + 4], 2), c("exp", "roll"), sep = "_") #Name the columns for clarity
@@ -276,24 +284,25 @@ for (i in 1:2) { #This takes like 5000 years
 ### Saving the list of forecasts (since the code runs for a long time) ###
 save("forecasts", file = "forecasts.RData")
 
-#Converting the GARCH forecasts from variance to volatility
-for (i in 5:6) {
-  forecasts[[i]] <- sqrt(forecasts[[i]])
-}
+#Loading foracasts
+load("forecasts.RData")
 
 #Inspecting the forecasts
 for (i in 1:6) {
-  print(summary(forecasts[[i]])) #Incredibly high forecasts for Realized GARCH with expanding window (possibly due to convergence issues)
+  print(summary(forecasts[[i]])) #Incredibly high forecasts for Realized GARCH (possibly due to convergence issues)
 }
 
-#Inspecting the boxplots
-par(mfrow = c(3, 2))
-for (i in 1:6) {
-  boxplot(forecasts[[i]]) #Realized GARCH with expanding window has extreme values
-}
-box_real_garch_forec <- boxplot(forecasts[[5]][, 1])
-box_real_garch_forec$out #Outliers of realized GARCH with expanding window
-forecasts[[5]][forecasts[[5]][, 1] >= 0.2, 1] <- NA #Disregarding values higher than 0.2
+#Inspecting the outliers of Realized GARCH
+boxplot(forecasts[[5]]) #Extreme outliers
+#Truncation 97.5 percentile
+thres1 <- quantile(forecasts[[5]][, 1], probs = 0.975)
+forecasts[[5]][forecasts[[5]][, 1] > thres1, 1] <- NA #Disregarding values higher than 97.5 percentile
+#Truncation 88 percentile
+thres2 <- quantile(forecasts[[5]][, 2], probs = 0.88)
+forecasts[[5]][forecasts[[5]][, 2] > thres2, 2] <- NA #Disregarding values higher than 88 percentile
+
+#Summary again
+summary(forecasts[[5]]) #More reasonable now
 
 ### Calculating forecast errors ###
 #Defining a function to calculate the errors
@@ -352,7 +361,7 @@ for (i in 1:12) { #Looping through the columns of MSE
     }
   }
 }
-sort(dm_test_points, decreasing = T) #HAR-RS the best
+sort(dm_test_points, decreasing = T) #AR(1)-RV the best
 
 ### Mincer-Zarnowitz regression ###
 
@@ -367,7 +376,6 @@ for (i in 1:12) { #For each model
   MZ_results[i] <- ifelse(indic1 & indic2, T, F)
 }
 MZ_results #Half of the models pass and half does not
-
 
 ########################################################################################################################################
 
