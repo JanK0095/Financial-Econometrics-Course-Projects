@@ -284,7 +284,7 @@ for (i in 1:2) { #This takes like 5000 years
 ### Saving the list of forecasts (since the code runs for a long time) ###
 save("forecasts", file = "forecasts.RData")
 
-#Loading foracasts
+#Loading forecasts
 load("forecasts.RData")
 
 #Inspecting the forecasts
@@ -319,7 +319,7 @@ forecast_errors <- lapply(forecasts, calc_errors)
 ### Plotting forecast errors ###
 par(mfrow = c(3,2))
 for (i in 1:6) {
-  print(plot(forecast_errors[[i]], main = model_names[i])) #Extreme errors for GARCH-type models
+  print(plot(forecast_errors[[i]], main = model_names[i]))
 }
 
 ### Calculating loss functions ###
