@@ -221,9 +221,9 @@ for (i in 1:6) {
 
 #Defining a function
 forecast_lm <- function(form, xts_object = amzn, wind_len = 750, roll = F) { #Forecast based on a dataset, model formula, length of the window and either rolling or expanding
-  result <- xts(rep(NA, wind_len), order.by = index(xts_object)[(wind_len + 1):nrow(xts_object)]) #Empty xts object for the results (predicting 751-1500)
+  result <- xts(rep(NA, nrow(xts_object)-wind_len), order.by = index(xts_object)[(wind_len + 1):nrow(xts_object)]) #Empty xts object for the results (predicting 751-1500)
   if (roll == T) { #Rolling window
-    for (i in 1:wind_len) { #Looping through the rolled windows
+    for (i in 1:(nrow(xts_object)-wind_len)) { #Looping through the rolled windows
       model <- lm(form, data = xts_object[i:(wind_len-1+i)]) #Estimating the model on the window (1-750, 2-751...)
       result[i] <- predict(model, newdata = xts_object[wind_len + i]) #Forecasting
     }
@@ -254,11 +254,11 @@ for (i in 1:4) {
 
 #Defining a function to forecast GARCH type models
 forecast_garch <- function(specif, xts_object = amzn$ret, realizedVol = amzn$RV, wind_len = 750, roll = F) {
-  result <- xts(rep(NA, wind_len), order.by = index(xts_object)[(wind_len + 1):nrow(xts_object)]) #Empty xts object for the results (predicting 751-1500)
+  result <- xts(rep(NA, nrow(xts_object)-wind_len), order.by = index(xts_object)[(wind_len + 1):nrow(xts_object)]) #Empty xts object for the results (predicting 751-1500)
   print(specif@model$modeldesc$vmodel)
   if (roll == T) { #Rolling window
     print("roll")
-    for (i in 1:wind_len) { #Looping through the rolled windows
+    for (i in 1:(nrow(xts_object)-wind_len)) { #Looping through the rolled windows
       print(i)
       model <- ugarchfit(specif, xts_object[i:(wind_len-1+i)], realizedVol = realizedVol[i:(wind_len-1+i)], solver = "hybrid") #Fitting the model, hybrid solver to prevent convergence failure
       result[i] <- as.numeric(ugarchforecast(model, n.ahead = 1)@forecast$sigmaFor) #Producing the 1 step ahead forecast
