@@ -319,8 +319,11 @@ forecast_errors <- lapply(forecasts, calc_errors)
 ### Plotting forecast errors ###
 par(mfrow = c(3,2))
 for (i in 1:6) {
-  print(plot(forecast_errors[[i]], main = model_names[i]))
+  plot_holder <- plot(forecast_errors[[i]], main = model_names[i])
+  plot_holder <- addLegend("topright", on = 1, legend.names = c("Expanding window", "Rolling window"), col = c("black", "red"), lty = 1, bty = "n", lwd = c(2, 1))
+  print(plot_holder)
 }
+
 
 ### Calculating loss functions ###
 
