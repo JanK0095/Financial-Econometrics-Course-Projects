@@ -140,7 +140,7 @@ addLegend("topright", on = 1, legend.names = c("Realized Volatility", "HAR with 
 ### Realized GARCH ###
 
 real_garchspec <- ugarchspec(variance.model = list(model = "realGARCH", garchOrder = c(1, 1)),
-                            mean.model = list(armaOrder = c(0, 0)))
+                            mean.model = list(armaOrder = c(0, 0)), distribution.model = "std")
 real_garch_fit<- ugarchfit(real_garchspec, amzn$ret, realizedVol = amzn$RV)  
 real_garch_fit #Spec tests ok
 acf(residuals(real_garch_fit, standardize = T), main = "ACF", ylab = "")
@@ -178,7 +178,7 @@ for (lag_order in c(4, 8, 12)) {
   print(Box.test(arma11$residuals, type = "Ljung-Box", lag = lag_order)$p.value) #No significant dependencies
 }
 
-arma_garchspec <- ugarchspec(variance.model = list(model = "sGARCH", garchOrder = c(1, 2)), mean.model = list(armaOrder = c(1, 1)))
+arma_garchspec <- ugarchspec(variance.model = list(model = "sGARCH", garchOrder = c(1, 1)), mean.model = list(armaOrder = c(1, 1)), distribution.model = "std")
 arma_garch_fit <- ugarchfit(arma_garchspec, amzn$ret)
 arma_garch_fit #Everything significant, some dependency in standardized residuals for GARCH(1,1) => GARCH(1,2) better
 arma_garch_fitted <- sigma(arma_garch_fit)
@@ -186,6 +186,7 @@ arma_garch_fitted <- sigma(arma_garch_fit)
 plot(amzn$RV, main = "ARMA-GARCH estimated volatility", grid.col = NA)
 lines(arma_garch_fitted, col = "red") #Seems extremely overestimated
 addLegend("topright", on = 1, legend.names = c("Realized Volatility", "ARMA-GARCH fitted values"), col = c("black", "red"), lty = 1, bty = "n", lwd = c(2, 1))
+pacf(residuals(arma_garch_fit, standardize = T))
 
 ### Comparison ###
 
@@ -282,27 +283,27 @@ for (i in 1:2) { #This takes like 5000 years
 }
 
 ### Saving the list of forecasts (since the code runs for a long time) ###
-save("forecasts", file = "forecasts.RData")
+#save("forecasts", file = "forecasts.RData")
 
 #Loading forecasts
 load("forecasts.RData")
 
 #Inspecting the forecasts
 for (i in 1:6) {
-  print(summary(forecasts[[i]])) #Incredibly high forecasts for Realized GARCH (possibly due to convergence issues)
+  print(summary(forecasts[[i]])) #Incredibly high forecasts for Realized GARCH with expanding window (possibly due to convergence issues)
 }
 
 #Inspecting the outliers of Realized GARCH
-boxplot(forecasts[[5]]) #Extreme outliers
+boxplot(forecasts[[5]][, 1]) #Extreme outliers
 #Truncation 97.5 percentile
 thres1 <- quantile(forecasts[[5]][, 1], probs = 0.975)
 forecasts[[5]][forecasts[[5]][, 1] > thres1, 1] <- NA #Disregarding values higher than 97.5 percentile
 #Truncation 88 percentile
-thres2 <- quantile(forecasts[[5]][, 2], probs = 0.88)
-forecasts[[5]][forecasts[[5]][, 2] > thres2, 2] <- NA #Disregarding values higher than 88 percentile
+#thres2 <- quantile(forecasts[[5]][, 2], probs = 0.88)
+#forecasts[[5]][forecasts[[5]][, 2] > thres2, 2] <- NA #Disregarding values higher than 88 percentile
 
 #Summary again
-summary(forecasts[[5]]) #More reasonable now
+summary(forecasts[[5]]) #More reasonable now, disregarded 19 values
 
 ### Calculating forecast errors ###
 #Defining a function to calculate the errors
