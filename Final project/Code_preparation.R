@@ -366,6 +366,23 @@ sort(dm_test_points, decreasing = T) #AR(1)-RV the best
 
 ### Mincer-Zarnowitz regression ###
 
+#Mincer-Zarnowitz regression
+forecasts_merged <- do.call(merge.xts, forecasts) #Merging the forecasts into a single xts object
+MZ_results <- matrix(nrow = 12) #Empty matrix for the results of MZ test
+row.names(MZ_results) <- names(forecasts_merged)
+for (i in 1:12) { #For each model
+  print(i)
+  mz_model <- lm(amzn$RV[index(forecasts_merged)] ~ forecasts_merged[, i]) #Estimate the model
+  cov <- vcovHAC(mz_model) #Saving the robust covariance matrix
+  coefs <- coefficients(mz_model) #Saving the model coefficients
+  wald_test <- (coefs - c(0, 1)) %*% solve(cov) %*% c(coefs - c(0, 1)) #Perform Wald test
+  p_val <- pchisq(wald_test, 2, lower.tail = FALSE) #Get the p-value
+  MZ_results[i, ] <- ifelse(p_val > 0.05, T, F) #Compare the p-value to the 95% significance level
+}
+MZ_results
+
+### Mincer-Zarnowitz regression ###
+
 forecasts_merged <- do.call(merge.xts, forecasts) #Merging the forecasts into a single xts object
 MZ_results <- rep(NA, 12) #Empty vector for the results of MZ test
 names(MZ_results) <- names(forecasts_merged)
